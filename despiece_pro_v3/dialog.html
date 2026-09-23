@@ -48,6 +48,73 @@ body{
   background: rgba(255,255,255,0.14);
 }
 
+.ambiente-bar{
+  padding:8px 10px 0 10px;
+}
+
+.ambiente-tabs{
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  gap:6px;
+}
+
+.ambiente-tab-group{
+  display:inline-flex;
+  align-items:center;
+  gap:0;
+}
+
+.ambiente-tab{
+  background:rgba(255,255,255,0.06);
+  border:1px solid rgba(255,255,255,0.16);
+  color:#d7e4ff;
+  border-radius:5px;
+  padding:6px 10px;
+  font-size:12px;
+  cursor:pointer;
+  font-family:"Segoe UI", Arial, sans-serif;
+}
+
+.ambiente-tab.is-active{
+  background:rgba(96,165,250,0.22);
+  border-color:rgba(96,165,250,0.55);
+  color:#c8e4ff;
+}
+
+.ambiente-tab-add{
+  border-style:dashed;
+  color:#9ec9ff;
+}
+
+.ambiente-tab-delete{
+  background:rgba(255,80,80,0.18);
+  border:1px solid rgba(255,120,120,0.45);
+  color:#ffb4b4;
+  border-radius:0 5px 5px 0;
+  margin-left:-1px;
+  padding:5px 8px;
+  font-size:13px;
+  cursor:pointer;
+  line-height:1;
+}
+
+.ambiente-tab-group .ambiente-tab.is-active{
+  border-radius:5px 0 0 5px;
+}
+
+.ambiente-select{
+  max-width:120px;
+  margin-right:8px;
+  background:rgba(255,255,255,0.08);
+  border:1px solid rgba(255,255,255,0.22);
+  color:#eef3ff;
+  border-radius:4px;
+  padding:4px 6px;
+  font-size:11px;
+  font-family:"Segoe UI", Arial, sans-serif;
+}
+
 /* ==========================================
    MÓDULOS
 ========================================== */
@@ -398,6 +465,10 @@ body{
       <button class="top-bar-btn" onclick="openInfo();">ℹ Info Placas</button>
     </div>
 
+    <div class="ambiente-bar">
+      %AMBIENTE_TABS%
+    </div>
+
     %CONTENT%
 
     <div class="footer">
@@ -730,6 +801,35 @@ body{
         }
     };
 
+    window.selectAmbiente = function(uid){
+        if(window.sketchup && sketchup.set_active_ambiente){
+            sketchup.set_active_ambiente(uid || '');
+        }
+    };
+
+    window.createAmbiente = function(){
+        var nombre = window.prompt('Nombre del ambiente:', '');
+        if(nombre === null){
+            return;
+        }
+        nombre = trim(nombre);
+        if(!nombre){
+            return;
+        }
+        if(window.sketchup && sketchup.add_ambiente){
+            sketchup.add_ambiente(nombre);
+        }
+    };
+
+    window.deleteAmbiente = function(uid){
+        if(!uid){
+            return;
+        }
+        if(window.sketchup && sketchup.remove_ambiente){
+            sketchup.remove_ambiente(uid);
+        }
+    };
+
     window.locatePiece = function(uid, pieceUid){
         if(window.sketchup && sketchup.locate_piece){
             sketchup.locate_piece(uid, pieceUid);
@@ -859,7 +959,13 @@ body{
             header.addEventListener('click', function(e){
                 var target = e.target;
                 while(target && target !== header){
-                    if(target.classList && target.classList.contains('edit-btn')){
+                    if(target.classList && (
+                        target.classList.contains('edit-btn') ||
+                        target.classList.contains('ambiente-select')
+                    )){
+                        return;
+                    }
+                    if(target.tagName === 'SELECT' || target.tagName === 'OPTION'){
                         return;
                     }
                     target = target.parentNode;
@@ -874,6 +980,56 @@ body{
                 }
             });
         })(moduleHeaders[h]);
+    }
+
+    var ambienteTabs = document.querySelectorAll('.ambiente-tab[data-ambiente-uid]');
+    var at;
+    for(at = 0; at < ambienteTabs.length; at++){
+        (function(btn){
+            btn.addEventListener('click', function(e){
+                e.preventDefault();
+                e.stopPropagation();
+                selectAmbiente(btn.getAttribute('data-ambiente-uid') || '');
+            }, false);
+        })(ambienteTabs[at]);
+    }
+
+    var addAmbienteBtn = document.getElementById('btn-new-ambiente');
+    if(addAmbienteBtn){
+        addAmbienteBtn.addEventListener('click', function(e){
+            e.preventDefault();
+            e.stopPropagation();
+            createAmbiente();
+        }, false);
+    }
+
+    var deleteAmbienteBtns = document.querySelectorAll('.ambiente-tab-delete');
+    var da;
+    for(da = 0; da < deleteAmbienteBtns.length; da++){
+        (function(btn){
+            btn.addEventListener('click', function(e){
+                e.preventDefault();
+                e.stopPropagation();
+                deleteAmbiente(btn.getAttribute('data-ambiente-uid') || '');
+            }, false);
+        })(deleteAmbienteBtns[da]);
+    }
+
+    var ambienteSelects = document.querySelectorAll('.ambiente-select');
+    var as;
+    for(as = 0; as < ambienteSelects.length; as++){
+        (function(sel){
+            sel.addEventListener('click', function(e){
+                e.stopPropagation();
+            }, false);
+            sel.addEventListener('change', function(){
+                var moduleUid = sel.getAttribute('data-uid') || '';
+                var ambienteUid = sel.value || '';
+                if(window.sketchup && sketchup.set_module_ambiente){
+                    sketchup.set_module_ambiente(moduleUid, ambienteUid);
+                }
+            }, false);
+        })(ambienteSelects[as]);
     }
 
 })();

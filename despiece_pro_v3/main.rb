@@ -60,6 +60,8 @@ module BiraEstudio
       @color_names = {}
       @canto_config = {}
       @open_module_uids = []
+      @ambientes = []
+      @active_ambiente_uid = nil
       SCAN_MATERIAL_NAME = 'DespiecePROv3_escaneado'.freeze
       DEFAULT_BADGE_COLOR = '#ff941f'.freeze
       ATTRIBUTE_DICT = 'despiece_pro_v3'.freeze
@@ -68,7 +70,7 @@ module BiraEstudio
       PIECE_UID_KEY = 'piece_uid'.freeze
 
       class << self
-        attr_reader :modules, :scanned_entities
+        attr_reader :modules, :scanned_entities, :ambientes, :active_ambiente_uid
 
         def add_module(name, pieces, uid)
           @modules << {
@@ -77,13 +79,94 @@ module BiraEstudio
             pieces: pieces,
             piece_names: {},
             piece_cantos: {},
-            badge_color: DEFAULT_BADGE_COLOR
+            badge_color: DEFAULT_BADGE_COLOR,
+            ambiente_uid: normalize_ambiente_uid(@active_ambiente_uid)
           }
         end
 
         def find_module_by_uid(uid)
           uid = uid.to_s
           @modules.find { |entry| entry[:uid].to_s == uid }
+        end
+
+        def normalize_ambiente_uid(uid)
+          uid = uid.to_s.strip
+          uid.empty? ? nil : uid
+        end
+
+        def set_active_ambiente_uid(uid)
+          @active_ambiente_uid = normalize_ambiente_uid(uid)
+        end
+
+        def find_ambiente(uid)
+          uid = normalize_ambiente_uid(uid)
+          return nil if uid.nil?
+
+          (@ambientes || []).find { |amb| amb[:uid].to_s == uid }
+        end
+
+        def generate_ambiente_uid
+          "amb_#{Time.now.to_i}_#{rand(10000)}"
+        end
+
+        def add_ambiente(nombre)
+          @ambientes ||= []
+          nombre = nombre.to_s.strip
+          nombre = 'Ambiente' if nombre.empty?
+          uid = generate_ambiente_uid
+          @ambientes << { uid: uid, nombre: nombre }
+          set_active_ambiente_uid(uid)
+          uid
+        end
+
+        def remove_ambiente(uid)
+          uid = normalize_ambiente_uid(uid)
+          return false if uid.nil?
+
+          @ambientes ||= []
+          before = @ambientes.length
+          @ambientes.delete_if { |amb| amb[:uid].to_s == uid }
+          return false if @ambientes.length == before
+
+          @modules.each do |entry|
+            entry[:ambiente_uid] = nil if normalize_ambiente_uid(entry[:ambiente_uid]) == uid
+          end
+          set_active_ambiente_uid(nil) if @active_ambiente_uid == uid
+          true
+        end
+
+        def set_module_ambiente(module_uid, ambiente_uid)
+          entry = find_module_by_uid(module_uid)
+          return false unless entry
+
+          ambiente_uid = normalize_ambiente_uid(ambiente_uid)
+          if ambiente_uid && !find_ambiente(ambiente_uid)
+            return false
+          end
+
+          entry[:ambiente_uid] = ambiente_uid
+          true
+        end
+
+        def module_ambiente_uid(entry)
+          normalize_ambiente_uid(entry[:ambiente_uid])
+        end
+
+        def modules_for_ambiente(ambiente_uid)
+          ambiente_uid = normalize_ambiente_uid(ambiente_uid)
+          @modules.select { |entry| module_ambiente_uid(entry) == ambiente_uid }
+        end
+
+        def modules_for_active_ambiente
+          modules_for_ambiente(@active_ambiente_uid)
+        end
+
+        def active_ambiente_label
+          uid = normalize_ambiente_uid(@active_ambiente_uid)
+          return 'Sin asignar' if uid.nil?
+
+          amb = find_ambiente(uid)
+          amb ? amb[:nombre].to_s : 'Sin asignar'
         end
 
         def set_module_open(uid, open)
@@ -358,6 +441,7 @@ module BiraEstudio
             '<div class="module-separator">-</div>' +
             '<div class="module-name">' + name + '</div>' +
             '</div>' +
+            render_ambiente_select(entry) +
             '<button class="edit-btn">✎</button>' +
             '</div>' +
             '<div class="module-body">' +
@@ -368,6 +452,45 @@ module BiraEstudio
             '</div>' +
             '</div>' +
             '</div>'
+        end
+
+        def render_ambiente_select(entry)
+          current = module_ambiente_uid(entry).to_s
+          options = '<option value="">Sin asignar</option>'
+          (@ambientes || []).each do |amb|
+            selected = amb[:uid].to_s == current ? ' selected' : ''
+            options += '<option value="' + escape_html(amb[:uid].to_s) + '"' + selected + '>' +
+                       escape_html(amb[:nombre].to_s) + '</option>'
+          end
+
+          '<select class="ambiente-select" title="Ambiente" data-uid="' + escape_html(entry[:uid].to_s) + '">' +
+            options +
+            '</select>'
+        end
+
+        def format_ambiente_tabs
+          active = normalize_ambiente_uid(@active_ambiente_uid)
+          html = '<div class="ambiente-tabs">'
+
+          sin_class = active.nil? ? 'ambiente-tab is-active' : 'ambiente-tab'
+          html += '<button type="button" class="' + sin_class + '" data-ambiente-uid="">Sin asignar</button>'
+
+          (@ambientes || []).each do |amb|
+            uid = amb[:uid].to_s
+            tab_class = active == uid ? 'ambiente-tab is-active' : 'ambiente-tab'
+            html += '<span class="ambiente-tab-group">'
+            html += '<button type="button" class="' + tab_class + '" data-ambiente-uid="' + escape_html(uid) + '">' +
+                    escape_html(amb[:nombre].to_s) + '</button>'
+            if active == uid
+              html += '<button type="button" class="ambiente-tab-delete" title="Eliminar ambiente" data-ambiente-uid="' +
+                      escape_html(uid) + '">×</button>'
+            end
+            html += '</span>'
+          end
+
+          html += '<button type="button" class="ambiente-tab ambiente-tab-add" id="btn-new-ambiente">+ Nuevo ambiente</button>'
+          html += '</div>'
+          html
         end
 
         def render_piece_row(piece, count, acronym, piece_name, piece_uid, color, uid)
@@ -464,6 +587,8 @@ module BiraEstudio
           @color_names = {}
           @canto_config = {}
           @open_module_uids = []
+          @ambientes = []
+          @active_ambiente_uid = nil
         end
 
         def entity_uid(entity)
@@ -1132,6 +1257,7 @@ module BiraEstudio
           reset_state!
           @color_names = normalize_hash(data['color_names'] || {})
           @canto_config = normalize_canto_config(data['canto_config'] || {})
+          @ambientes = deserialize_ambientes(data['ambientes'])
 
           modules_data = data['modules']
           unless modules_data.is_a?(Array)
@@ -1163,13 +1289,17 @@ module BiraEstudio
               puts "Despiece PRO: uid #{uid} no encontrado en el modelo, restaurando datos igual"
             end
 
+            ambiente_uid = normalize_ambiente_uid(entry['ambiente_uid'])
+            ambiente_uid = nil if ambiente_uid && !find_ambiente(ambiente_uid)
+
             module_entry = {
               name: entry['name'].to_s,
               uid: uid,
               pieces: pieces,
               piece_names: normalize_hash(entry['piece_names'] || {}),
               piece_cantos: normalize_hash(entry['piece_cantos'] || {}),
-              badge_color: entry['badge_color'] || DEFAULT_BADGE_COLOR
+              badge_color: entry['badge_color'] || DEFAULT_BADGE_COLOR,
+              ambiente_uid: ambiente_uid
             }
             migrate_piece_metadata!(module_entry)
             repair_duplicate_piece_uids!(module_entry)
@@ -1242,6 +1372,7 @@ module BiraEstudio
             {
               'uid' => entry[:uid].to_s,
               'name' => entry[:name],
+              'ambiente_uid' => module_ambiente_uid(entry),
               'pieces' => entry[:pieces].map do |piece|
                 {
                   'uid' => piece[:uid].to_s,
@@ -1259,11 +1390,33 @@ module BiraEstudio
             }
           end
 
+          ambientes_data = (@ambientes || []).map do |amb|
+            {
+              'uid' => amb[:uid].to_s,
+              'nombre' => amb[:nombre].to_s
+            }
+          end
+
           JSON.generate(
             'modules' => modules_data,
+            'ambientes' => ambientes_data,
             'color_names' => @color_names || {},
             'canto_config' => @canto_config || {}
           )
+        end
+
+        def deserialize_ambientes(ambientes_data)
+          return [] unless ambientes_data.is_a?(Array)
+
+          ambientes_data.map do |amb|
+            amb = normalize_hash(amb)
+            uid = amb['uid'].to_s.strip
+            next if uid.empty?
+
+            nombre = amb['nombre'].to_s.strip
+            nombre = 'Ambiente' if nombre.empty?
+            { uid: uid, nombre: nombre }
+          end.compact
         end
 
         def deserialize_pieces(pieces_data)
@@ -1318,6 +1471,16 @@ module BiraEstudio
           count
         end
 
+        def total_pieces_active
+          count = 0
+          modules_for_active_ambiente.each do |entry|
+            entry[:pieces].each do |piece|
+              count += piece[:count]
+            end
+          end
+          count
+        end
+
         def format_text
           return "Lista vacia.\nEscanea un modulo para comenzar." if @modules.empty?
 
@@ -1341,19 +1504,25 @@ module BiraEstudio
         end
 
         def format_html
-          return empty_html if @modules.empty?
+          filtered = modules_for_active_ambiente
+          return empty_html if filtered.empty?
 
-          @modules.map { |entry| render_module_block(entry) }.join('')
+          filtered.map { |entry| render_module_block(entry) }.join('')
         end
 
         def empty_html
-          '<div class="empty">Lista vacia. Escanea un modulo para comenzar.</div>'
+          if @modules.empty?
+            '<div class="empty">Lista vacia. Escanea un modulo para comenzar.</div>'
+          else
+            '<div class="empty">No hay modulos en este ambiente.</div>'
+          end
         end
 
-        def export_payload
+        def export_payload(ambiente_filter = :all)
           rows = []
+          modules = modules_for_export(ambiente_filter)
 
-          @modules.each do |entry|
+          modules.each do |entry|
             acronym = module_acronym(entry[:name])
             label = if acronym.empty?
                       "\u2014 #{entry[:name]} \u2014"
@@ -1405,6 +1574,19 @@ module BiraEstudio
           }
         end
 
+        def modules_for_export(ambiente_filter = :all)
+          case ambiente_filter
+          when :all
+            @modules
+          when :active
+            modules_for_active_ambiente
+          when :unassigned, nil, ''
+            modules_for_ambiente(nil)
+          else
+            modules_for_ambiente(ambiente_filter)
+          end
+        end
+
         def project_export_title
           "PROYECTO: #{project_name_for_export} \u2014 #{Time.now.strftime('%d/%m/%Y')}"
         end
@@ -1453,8 +1635,17 @@ module BiraEstudio
             return
           end
 
+          ambiente_filter = ask_ambiente_export_filter
+          return if ambiente_filter == :cancel
+
+          modules = Store.modules_for_export(ambiente_filter)
+          if modules.empty?
+            UI.messagebox('No hay modulos para exportar con el filtro elegido.')
+            return
+          end
+
           sin_nombre = []
-          Store.modules.each do |entry|
+          modules.each do |entry|
             entry[:pieces].each do |piece|
               color = piece[:color].to_s.strip.upcase
               next if color.empty? || color == '#FFFFFF'
@@ -1480,12 +1671,30 @@ module BiraEstudio
 
           path = normalize_xlsx_path(path)
 
-          if write_xlsx(path, formato)
+          if write_xlsx(path, formato, ambiente_filter)
             Sketchup.status_text = "Excel exportado: #{path}"
           else
             detail = last_error.to_s.strip
             detail = 'Error desconocido.' if detail.empty?
             UI.messagebox("No se pudo exportar el Excel.\n\n#{detail}")
+          end
+        end
+
+        def ask_ambiente_export_filter
+          label = Store.active_ambiente_label
+          message =
+            "Ambiente actual: #{label}\n\n" \
+            "Si = exportar solo \"#{label}\"\n" \
+            'No = exportar todos los ambientes'
+
+          result = UI.messagebox(message, MB_YESNOCANCEL)
+          case result
+          when IDYES
+            :active
+          when IDNO
+            :all
+          else
+            :cancel
           end
         end
 
@@ -1496,7 +1705,7 @@ module BiraEstudio
           path + '.xlsx'
         end
 
-        def write_xlsx(xlsx_path, formato = 'clasico')
+        def write_xlsx(xlsx_path, formato = 'clasico', ambiente_filter = :all)
           @last_error = nil
           python = find_python_executable
           unless python
@@ -1516,7 +1725,7 @@ module BiraEstudio
           end
 
           json_path = File.join(Dir.tmpdir, "despiece_pro_v3_export_#{Time.now.to_i}_#{rand(1000)}.json")
-          json_content = JSON.generate(Store.export_payload)
+          json_content = JSON.generate(Store.export_payload(ambiente_filter))
           File.open(json_path, 'wb') do |handle|
             handle.write(json_content)
           end
@@ -2022,6 +2231,34 @@ module BiraEstudio
             refresh
           end
 
+          dialog.add_action_callback('set_active_ambiente') do |_context, ambiente_uid|
+            Store.set_active_ambiente_uid(ambiente_uid)
+            refresh
+          end
+
+          dialog.add_action_callback('add_ambiente') do |_context, nombre|
+            Store.add_ambiente(nombre)
+            refresh
+          end
+
+          dialog.add_action_callback('remove_ambiente') do |_context, ambiente_uid|
+            label = Store.find_ambiente(ambiente_uid)
+            nombre = label ? label[:nombre].to_s : ambiente_uid.to_s
+            confirm = UI.messagebox(
+              "Eliminar ambiente \"#{nombre}\"?\nLos modulos pasan a Sin asignar.",
+              MB_YESNO
+            )
+            next unless confirm == IDYES
+
+            Store.remove_ambiente(ambiente_uid)
+            refresh
+          end
+
+          dialog.add_action_callback('set_module_ambiente') do |_context, module_uid, ambiente_uid|
+            Store.set_module_ambiente(module_uid, ambiente_uid)
+            refresh
+          end
+
           dialog.add_action_callback('export_excel') do |_context, formato|
             formato = formato.to_s.strip
             formato = 'clasico' if formato.empty?
@@ -2049,8 +2286,9 @@ module BiraEstudio
 
         def dialog_body_html
           html = File.read(File.join(PLUGIN_DIR, 'dialog.html'))
-          html.gsub('%CONTENT%', Store.format_html)
-              .gsub('%TOTAL%', Store.total_pieces.to_s)
+          html.gsub('%AMBIENTE_TABS%', Store.format_ambiente_tabs)
+              .gsub('%CONTENT%', Store.format_html)
+              .gsub('%TOTAL%', Store.total_pieces_active.to_s)
         end
       end
     end
